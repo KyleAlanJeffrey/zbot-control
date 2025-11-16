@@ -16,7 +16,8 @@ from scservo_sdk import *  # Uses SC Servo SDK library
 
 import sys, tty, termios
 
-LEFT_LEG_IDS = [31, 32, 33, 34, 35]
+# LEFT_LEG_IDS = [31, 32, 33, 34, 35]
+LEFT_LEG_IDS = []
 RIGHT_LEG_IDS = [41, 42, 43, 44, 45]
 
 # Default setting
@@ -45,7 +46,6 @@ if portHandler.openPort():
 else:
     print("Failed to open the port")
     print("Press any key to terminate...")
-    getch()
     quit()
 
 # Set port baudrate
@@ -54,7 +54,6 @@ if portHandler.setBaudRate(BAUDRATE):
 else:
     print("Failed to change the baudrate")
     print("Press any key to terminate...")
-    getch()
     quit()
 
 while 1:

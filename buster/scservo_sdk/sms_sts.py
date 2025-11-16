@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+from loguru import logger
 from .scservo_def import *
 from .protocol_packet_handler import *
 from .group_sync_read import *
@@ -24,9 +25,12 @@ SMS_STS_MODEL_H = 4
 SMS_STS_ID = 5
 SMS_STS_BAUD_RATE = 6
 SMS_STS_MIN_ANGLE_LIMIT_L = 9
-SMS_STS_MIN_ANGLE_LIMIT_H = 10
+# SMS_STS_MIN_ANGLE_LIMIT_H = 10
 SMS_STS_MAX_ANGLE_LIMIT_L = 11
-SMS_STS_MAX_ANGLE_LIMIT_H = 12
+# SMS_STS_MAX_ANGLE_LIMIT_H = 12
+SMS_STS_MAX_TEMP_LIMIT = 13
+SMS_STS_MAX_INPUT_VOLTAGE = 14
+SMS_STS_MIN_INPUT_VOLTAGE = 15
 SMS_STS_CW_DEAD = 26
 SMS_STS_CCW_DEAD = 27
 SMS_STS_OFS_L = 31
@@ -57,10 +61,29 @@ SMS_STS_MOVING = 66
 SMS_STS_PRESENT_CURRENT_L = 69
 SMS_STS_PRESENT_CURRENT_H = 70
 
+
+def comm_error_log(comm_result, error, packet_handler):
+    """Logs communication errors for motor actions."""
+    if comm_result != COMM_SUCCESS:
+        logger.error(
+            f"Failed {packet_handler.getTxRxResult(comm_result)}"
+        )
+    if error != 0:
+        logger.error(
+            f"Error : {packet_handler.getRxPacketError(error)}"
+        )
+
 class sms_sts(protocol_packet_handler):
     def __init__(self, portHandler):
         protocol_packet_handler.__init__(self, portHandler, 0)
         self.groupSyncWrite = GroupSyncWrite(self, SMS_STS_ACC, 7)
+
+    def _write_setting(self, scs_id, address, value):
+        """ Helper to write a setting that requires unlocking the EPROM. Returns (comm_result, error) """
+        self.unLockEprom(scs_id)
+        scs_comm_result, scs_error = self.write1ByteTxRx(scs_id, address, value)
+        self.LockEprom(scs_id)
+        return scs_comm_result, scs_error
 
     def WritePosEx(self, scs_id, position, speed, acc):
         txpacket = [acc, self.scs_lobyte(position), self.scs_hibyte(position), 0, 0, self.scs_lobyte(speed), self.scs_hibyte(speed)]
@@ -73,7 +96,52 @@ class sms_sts(protocol_packet_handler):
     def ReadSpeed(self, scs_id):
         scs_present_speed, scs_comm_result, scs_error = self.read2ByteTxRx(scs_id, SMS_STS_PRESENT_SPEED_L)
         return self.scs_tohost(scs_present_speed, 15), scs_comm_result, scs_error
+    
+    def ReadVoltage(self, scs_id):
+        scs_present_voltage, scs_comm_result, scs_error = self.read1ByteTxRx(scs_id, SMS_STS_PRESENT_VOLTAGE)
+        return self.scs_tohost(scs_present_voltage, 15), scs_comm_result, scs_error
+    
+    def ReadVoltageLimits(self, scs_id):
+        """Read voltage limits. Returns (max_voltage, min_voltage, comm_result, error) """
+        max_voltage, scs_comm_result, scs_error = self.read1ByteTxRx(scs_id, SMS_STS_MAX_INPUT_VOLTAGE)
+        if scs_comm_result != COMM_SUCCESS:
+            return 0, 0, scs_comm_result, scs_error
+        min_voltage, scs_comm_result, scs_error = self.read1ByteTxRx(scs_id, SMS_STS_MIN_INPUT_VOLTAGE)
+        return self.scs_tohost(max_voltage, 15), self.scs_tohost(min_voltage, 15), scs_comm_result, scs_error
 
+    def WriteVoltageLimits(self, scs_id, max_voltage, min_voltage):
+        """ Sets max and min voltage limits. Returns (comm_result, error) """
+        scs_max_voltage = self.scs_toscs(max_voltage, 15)
+        scs_min_voltage = self.scs_toscs(min_voltage, 15)
+        comm_result, error = self._write_setting(scs_id, SMS_STS_MAX_INPUT_VOLTAGE, scs_max_voltage)
+        comm_error_log(comm_result, error, self)
+        comm_result, error = self._write_setting(scs_id, SMS_STS_MIN_INPUT_VOLTAGE, scs_min_voltage)
+        comm_error_log(comm_result, error, self)
+        return comm_result, error
+
+    def ReadTemperature(self, scs_id):
+        """Read temperature. Returns (temp, comm_result, error) """
+        temp, scs_comm_result, scs_error = self.read1ByteTxRx(scs_id, SMS_STS_PRESENT_TEMPERATURE)
+        return self.scs_tohost(temp, 15), scs_comm_result, scs_error
+
+    def ReadTemperatureLimit(self, scs_id):
+        """Read temperature limits. Returns (max_temp, comm_result, error) """
+        max_temp, scs_comm_result, scs_error = self.read1ByteTxRx(scs_id, SMS_STS_MAX_TEMP_LIMIT)
+        return self.scs_tohost(max_temp, 15), scs_comm_result, scs_error
+
+    def WriteTemperatureLimit(self, scs_id, max_temp):
+        """ Sets max temperature limit. Returns (comm_result, error) """
+        scs_max_temp = self.scs_toscs(max_temp, 15)
+        comm_result, error = self._write_setting(scs_id, SMS_STS_MAX_TEMP_LIMIT, scs_max_temp)
+        comm_error_log(comm_result, error, self)
+        return comm_result, error
+
+    def ReadMotorLimits(self, scs_id):
+        """Reads motor angle limits. Returns (min_angle, max_angle, comm_result, error) """
+        min_angle_l, scs_comm_result, scs_error = self.read2ByteTxRx(scs_id, SMS_STS_MIN_ANGLE_LIMIT_L)
+        max_angle_l, scs_comm_result, scs_error = self.read2ByteTxRx(scs_id, SMS_STS_MAX_ANGLE_LIMIT_L)
+        return self.scs_tohost(min_angle_l, 15), self.scs_tohost(max_angle_l, 15), scs_comm_result, scs_error
+    
     def ReadPosSpeed(self, scs_id):
         scs_present_position_speed, scs_comm_result, scs_error = self.read4ByteTxRx(scs_id, SMS_STS_PRESENT_POSITION_L)
         scs_present_position = self.scs_loword(scs_present_position_speed)
